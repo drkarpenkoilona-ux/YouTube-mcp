@@ -4,37 +4,23 @@ app.use(express.json());
 
 const API_KEY = process.env.YOUTUBE_API_KEY;
 
-// OAuth endpoints для Claude
-app.get('/.well-known/oauth-authorization-server', (req, res) => {
-  const base = 'https://youtube-mcp-lkmc.onrender.com';
-  res.json({
-    issuer: base,
-    authorization_endpoint: `${base}/auth`,
-    token_endpoint: `${base}/token`,
-    response_types_supported: ['code'],
-    grant_types_supported: ['authorization_code']
-  });
-});
-
-app.get('/auth', (req, res) => {
-  const { redirect_uri, state } = req.query;
-  res.redirect(`${redirect_uri}?code=ok&state=${state}`);
-});
-
-app.post('/token', (req, res) => {
-  res.json({ access_token: 'ok', token_type: 'bearer' });
-});
-
-// MCP endpoint
 app.post('/mcp', async (req, res) => {
   const { method, params } = req.body;
+
+  if (method === 'initialize') {
+    return res.json({
+      protocolVersion: '2024-11-05',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'youtube-mcp', version: '1.0.0' }
+    });
+  }
 
   if (method === 'tools/list') {
     return res.json({
       tools: [
         {
           name: 'analyze_channel',
-          description: 'Analyze a YouTube channel',
+          description: 'Analyze a YouTube channel by URL or handle',
           inputSchema: {
             type: 'object',
             properties: {
@@ -50,7 +36,7 @@ app.post('/mcp', async (req, res) => {
             type: 'object',
             properties: {
               query: { type: 'string', description: 'Search query' },
-              maxResults: { type: 'number', description: 'Number of results' }
+              maxResults: { type: 'number' }
             },
             required: ['query']
           }
@@ -64,13 +50,12 @@ app.post('/mcp', async (req, res) => {
 
     if (name === 'analyze_channel') {
       try {
-        let channelId = args.channel;
-        const handle = channelId.split('@').pop().split('?')[0];
+        const handle = args.channel.split('@').pop().split('?')[0];
         const searchRes = await fetch(
           `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${handle}&key=${API_KEY}`
         );
         const searchData = await searchRes.json();
-        channelId = searchData.items?.[0]?.snippet?.channelId;
+        const channelId = searchData.items?.[0]?.snippet?.channelId;
 
         const statsRes = await fetch(
           `https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet&id=${channelId}&key=${API_KEY}`
@@ -83,24 +68,20 @@ app.post('/mcp', async (req, res) => {
         );
         const videosData = await videosRes.json();
 
-        const result = {
-          name: channel?.snippet?.title,
-          subscribers: channel?.statistics?.subscriberCount,
-          totalViews: channel?.statistics?.viewCount,
-          videoCount: channel?.statistics?.videoCount,
-          recentVideos: videosData.items?.map(v => ({
-            title: v.snippet.title,
-            published: v.snippet.publishedAt
-          }))
-        };
-
         return res.json({
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+          content: [{ type: 'text', text: JSON.stringify({
+            name: channel?.snippet?.title,
+            subscribers: channel?.statistics?.subscriberCount,
+            totalViews: channel?.statistics?.viewCount,
+            videoCount: channel?.statistics?.videoCount,
+            recentVideos: videosData.items?.map(v => ({
+              title: v.snippet.title,
+              published: v.snippet.publishedAt
+            }))
+          }, null, 2) }]
         });
       } catch (e) {
-        return res.json({
-          content: [{ type: 'text', text: `Error: ${e.message}` }]
-        });
+        return res.json({ content: [{ type: 'text', text: `Error: ${e.message}` }] });
       }
     }
 
@@ -110,23 +91,22 @@ app.post('/mcp', async (req, res) => {
           `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(args.query)}&maxResults=${args.maxResults || 5}&key=${API_KEY}`
         );
         const searchData = await searchRes.json();
-        const channels = searchData.items?.map(item => ({
-          name: item.snippet.channelTitle,
-          channelId: item.snippet.channelId,
-          description: item.snippet.description
-        }));
         return res.json({
-          content: [{ type: 'text', text: JSON.stringify(channels, null, 2) }]
+          content: [{ type: 'text', text: JSON.stringify(
+            searchData.items?.map(i => ({
+              name: i.snippet.channelTitle,
+              channelId: i.snippet.channelId,
+              description: i.snippet.description
+            })), null, 2
+          ) }]
         });
       } catch (e) {
-        return res.json({
-          content: [{ type: 'text', text: `Error: ${e.message}` }]
-        });
+        return res.json({ content: [{ type: 'text', text: `Error: ${e.message}` }] });
       }
     }
   }
 
-  res.json({ error: 'Unknown method' });
+  res.json({ jsonrpc: '2.0', error: { code: -32601, message: 'Method not found' } });
 });
 
 const PORT = process.env.PORT || 3000;
