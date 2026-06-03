@@ -4,15 +4,37 @@ app.use(express.json());
 
 const API_KEY = process.env.YOUTUBE_API_KEY;
 
+// OAuth endpoints для Claude
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+  const base = 'https://youtube-mcp-lkmc.onrender.com';
+  res.json({
+    issuer: base,
+    authorization_endpoint: `${base}/auth`,
+    token_endpoint: `${base}/token`,
+    response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code']
+  });
+});
+
+app.get('/auth', (req, res) => {
+  const { redirect_uri, state } = req.query;
+  res.redirect(`${redirect_uri}?code=ok&state=${state}`);
+});
+
+app.post('/token', (req, res) => {
+  res.json({ access_token: 'ok', token_type: 'bearer' });
+});
+
+// MCP endpoint
 app.post('/mcp', async (req, res) => {
   const { method, params } = req.body;
-  
+
   if (method === 'tools/list') {
     return res.json({
       tools: [
         {
           name: 'analyze_channel',
-          description: 'Analyze a YouTube channel by URL or handle',
+          description: 'Analyze a YouTube channel',
           inputSchema: {
             type: 'object',
             properties: {
@@ -23,7 +45,7 @@ app.post('/mcp', async (req, res) => {
         },
         {
           name: 'search_channels',
-          description: 'Search YouTube channels by keyword/niche',
+          description: 'Search YouTube channels by keyword',
           inputSchema: {
             type: 'object',
             properties: {
@@ -39,29 +61,23 @@ app.post('/mcp', async (req, res) => {
 
   if (method === 'tools/call') {
     const { name, arguments: args } = params;
-    
+
     if (name === 'analyze_channel') {
       try {
         let channelId = args.channel;
-        
-        // Get channel by handle
-        if (channelId.includes('@') || channelId.includes('youtube.com')) {
-          const handle = channelId.split('@').pop().split('?')[0];
-          const searchRes = await fetch(
-            `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${handle}&key=${API_KEY}`
-          );
-          const searchData = await searchRes.json();
-          channelId = searchData.items?.[0]?.snippet?.channelId;
-        }
+        const handle = channelId.split('@').pop().split('?')[0];
+        const searchRes = await fetch(
+          `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${handle}&key=${API_KEY}`
+        );
+        const searchData = await searchRes.json();
+        channelId = searchData.items?.[0]?.snippet?.channelId;
 
-        // Get channel stats
         const statsRes = await fetch(
-          `https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet,brandingSettings&id=${channelId}&key=${API_KEY}`
+          `https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet&id=${channelId}&key=${API_KEY}`
         );
         const statsData = await statsRes.json();
         const channel = statsData.items?.[0];
 
-        // Get recent videos
         const videosRes = await fetch(
           `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&order=date&maxResults=5&type=video&key=${API_KEY}`
         );
@@ -69,11 +85,9 @@ app.post('/mcp', async (req, res) => {
 
         const result = {
           name: channel?.snippet?.title,
-          description: channel?.snippet?.description,
           subscribers: channel?.statistics?.subscriberCount,
           totalViews: channel?.statistics?.viewCount,
           videoCount: channel?.statistics?.videoCount,
-          country: channel?.snippet?.country,
           recentVideos: videosData.items?.map(v => ({
             title: v.snippet.title,
             published: v.snippet.publishedAt
@@ -96,13 +110,11 @@ app.post('/mcp', async (req, res) => {
           `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(args.query)}&maxResults=${args.maxResults || 5}&key=${API_KEY}`
         );
         const searchData = await searchRes.json();
-        
         const channels = searchData.items?.map(item => ({
           name: item.snippet.channelTitle,
           channelId: item.snippet.channelId,
           description: item.snippet.description
         }));
-
         return res.json({
           content: [{ type: 'text', text: JSON.stringify(channels, null, 2) }]
         });
@@ -118,4 +130,4 @@ app.post('/mcp', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`YouTube MCP server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
